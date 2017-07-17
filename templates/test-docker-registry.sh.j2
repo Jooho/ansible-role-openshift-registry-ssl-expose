@@ -1,0 +1,127 @@
+export ca_dir="/etc/origin/master"
+echo " *************  Secured Docker Registry Test with Hostname  **************"
+echo ""
+echo " Check List "
+echo " 1. docker login with {{docker_registry_route_hostname}}"
+echo " 2. push busybox image to {{docker_registry_route_hostname}}"
+echo " 3. pull the pushed busybox image from {{docker_registry_route_hostname}}"
+echo ""
+echo ""
+
+# Check ca.crt file
+if [ "$#" -ne 1 ]; then
+  echo "usage : $0 -ca=/etc/origin/master/ca.crt "
+  exit 1
+fi
+
+for iii in $1
+do
+  if ( echo $iii | grep "\-ca" &> /dev/null )
+  then
+     c_ca=`echo $iii | awk -F "=" '{print $2}'`
+     if [[ z$c_ca == z ]]; then
+        echo "usage : $0 -ca=/etc/origin/master/ca.crt "
+        exit 1
+     else
+        echo "${c_ca}"
+        if [ ! -e ${c_ca} ]
+        then
+           echo "The ca.crt file is not there(${c_ca})"
+           exit 1
+        fi
+     fi
+  else
+     echo "usage : $0 -ca=/etc/origin/master/ca.crt "
+     exit 1
+  fi
+done
+
+
+
+oc login 
+oc new-project test-docker-registry
+docker login -u $(oc whoami) -p $(oc whoami -t) {{docker_registry_route_hostname}}
+
+echo ""
+echo "Result:"
+
+oadm policy add-role-to-user system:registry $(oc whoami)
+oadm policy add-role-to-user system:image-builder $(oc whoami)
+#oadm policy add-role-to-user admin <user_name> -n openshift
+
+mkdir -p /etc/docker/certs.d/{{docker_registry_route_hostname}}
+cp {{ca_dir}}/ca.crt  /etc/docker/certs.d/{{docker_registry_route_hostname}}
+systemctl restart docker
+
+docker pull busybox > /dev/null
+if [[ $? == 0 ]]
+then
+  echo " [Pull busybox Image from docker.io]: Success "
+else
+  echo " [Pull busybox Image from docker.io]: Fail"
+fi
+echo ""
+
+docker tag docker.io/busybox docker-registry.cloudapps.example.com/test-docker-registry/busybox > /dev/null
+if [[ $? == 0 ]]
+then
+  echo " [Tag busybox Image]: Success "
+else
+  echo " [Tag busybox Image]: Fail"
+fi
+echo ""
+
+docker push docker-registry.cloudapps.example.com/test-docker-registry/busybox > /dev/null
+if [[ $? == 0 ]]
+then
+  echo " [Push Image to {{docker_registry_route_hostname}}]: Success "
+else
+  echo " [Push Image to {{docker_registry_route_hostname}}]: Fail"
+fi
+echo ""
+
+docker pull docker-registry.cloudapps.example.com/test-docker-registry/busybox > /dev/null
+if [[ $? == 0 ]]
+then
+  echo " [Pull Image from {{docker_registry_route_hostname}}]: Success "
+else
+  echo " [Pull Image from {{docker_registry_route_hostname}}]: Fail"
+fi
+echo ""
+
+oc get is busybox -n test-docker-registry > /dev/null
+if [[ $? == 0 ]]
+then
+  echo " [busy ImageStream is created on ocp]: Success "
+else
+  echo " [busy ImageStream is created on ocp]: Fail"
+fi
+
+
+echo ""
+export correct_answer="false"
+while [ $correct_answer == "false" ]
+do
+  echo -n "Do you want to clean test project/images/policy?(y/n)"
+  read clean
+  if [[ $clean == "y" ]]; then
+    echo ""
+    echo "** Clean Project/Images/Policy **"
+    correct_answer="true"
+  elif [[ $clean == "n" ]]; then
+    correct_answer="true"
+    exit 0
+  else
+    echo "Please choose y or n only."
+  fi
+done 
+
+docker rmi docker.io/busybox docker-registry.cloudapps.example.com/test-docker-registry/busybox
+
+oadm policy remove-role-from-user system:registry $(oc whoami)
+oadm policy remove-role-from-user system:image-builder $(oc whoami)
+
+oc delete project test-docker-registry
+
+echo ""
+echo "************** Test Finished **************"
