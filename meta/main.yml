@@ -1,0 +1,15 @@
+galaxy_info:
+  author: jooho lee
+  description: This role help create a custom certificate for openshift integrated docker registry and apply the cert on docker registry.
+  company: your company (optional)
+  license: BSD/MIT
+  platforms:
+  - name: Fedora
+    versions:
+    - all
+  galaxy_tags:
+  - openshift
+  - registry
+  - ssl
+  - expose
+

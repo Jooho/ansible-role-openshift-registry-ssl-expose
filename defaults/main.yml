@@ -1,0 +1,19 @@
+---
+# defaults file for ansible-role-openshift-registry-ssl-expose
+
+replace_cert: no
+restart_docker: no
+temp_dir: /tmp/docker-registry-ca
+ca_dir: /etc/origin/master
+
+docker_registry_route_hostname: docker-registry.cloudapps.example.com
+#docker_registry_svc_ip: 172.30.156.119
+docker_registry_svc_name: docker-registry
+
+use_self_signed_cert: true
+# use_self_signed_cert set true, following will be ignored.
+#docker_registry_cert_file: "{{temp_dir}}/registry.crt"
+#docker_registry_key_file: "{{temp_dir}}/registry.key"
+
+
+
