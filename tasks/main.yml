@@ -2,132 +2,220 @@
 # tasks file for ansible-role-openshift-registry-ssl-expose
 
 
- - name: Check options - use_self_singed_cert
-   fail:
-     msg: use_self_signed_cert= false but docker_registry_cert_file/docker_registry_key_file are not defined (both or one of them)
-   when: not use_self_signed_cert and (docker_registry_cert_file is not defined or docker_registry_key_file is not defined)
-   run_once: true
+  - name: Check options - use_self_singed_cert
+    fail:
+      msg: use_self_signed_cert= false but docker_registry_cert_file/docker_registry_key_file are not defined (both or one of them)
+    when: not use_self_signed_cert and (docker_registry_cert_file is not defined or docker_registry_key_file is not defined)
+    run_once: true
+ 
+  - name: Create temp dir if it does not exist
+    file: "path={{temp_dir}} state=directory"
+    run_once: true
+ 
+  - name: Check if registry secret exist
+    command: "oc get secret registry-secret -n default"
+    register: exist_secret
+    ignore_errors: yes
+    run_once: true
+ 
+  - name: "Stop if registry secret exist unless replace_cert is true"
+    fail:
+      msg: "[FAIL] regsitry secret exist. If you want to replace it, please use replace_cert='true'"
+    when: exist_secret.rc == 0 and not replace_cert
+    run_once: true
+ 
+  - name: Remove triggers in docker-registry dc
+    shell: >
+      oc set triggers dc/docker-registry -n default --remove-all
+    run_once: true
 
- - name: Create temp dir if it does not exist
-   file: "path={{temp_dir}} state=directory"
-   run_once: true
+  - name: Remove exist registry secret
+    shell: "oc delete secrets registry-secret -n default"
+    when: exist_secret.rc == 0 and replace_cert
+    run_once: true
+ 
+  - name: Check if /etc/secret volume exist
+    shell: oc get dc docker-registry -n default -o=jsonpath={.spec.template.spec.volumes[*].name}|sed 's/\s\+/\n/g'|grep volume 
+    register: secret_vol_exist
+    run_once: yes
 
- - name: Check if registry secret exist
-   command: "oc get secret registry-secret -n default"
-   register: exist_secret
-   ignore_errors: yes
-   run_once: true
+  - name: Delete default secret volume
+    shell: "oc volumes --remove --name={{secret_vol_exist.stdout}} dc/docker-registry -n default --confirm"
+    when: secret_vol_exist.stdout.find('volume') != -1 
+    run_once: true
+ 
+  - name: Generate self signed cert for registry
+    shell: >
+      oadm ca create-server-cert 
+      --signer-cert={{ca_dir}}/ca.crt 
+      --signer-key={{ca_dir}}/ca.key 
+      --signer-serial={{ca_dir}}/ca.serial.txt 
+      --hostnames='{{docker_registry_svc_name}}.default.svc.cluster.local,{{docker_registry_svc_ip}},{{docker_registry_route_hostname}}' 
+      --cert={{temp_dir}}/registry.crt 
+      --key={{temp_dir}}/registry.key
+    when: use_self_signed_cert or (docker_registry_cert_file is not defined and docker_registry_key_file is not defined)
+    run_once: true
+   
+  - name: Create registry secret with new cert
+    shell: >
+      oc secrets new registry-secret 
+      -n default
+      {{temp_dir}}/registry.crt 
+      {{temp_dir}}/registry.key 
+    when: use_self_signed_cert or (docker_registry_cert_file is not defined and docker_registry_key_file is not defined)
+    run_once: true
+ 
+  - name: Check if the defined cert exist
+    stat: path={{docker_registry_cert_file}}
+    register: defined_cert_exist
+    when: not use_self_signed_cert 
+    run_once: true
+ 
+  - name: Check if the defined key exist
+    stat: path={{docker_registry_key_file}}
+    register: defined_key_exist
+    when: not use_self_signed_cert 
+    run_once: true
+ 
+  - name: Create registry secret with defined cert
+    shell: >
+      oc secrets new registry-secret  
+      {{docker_registry_cert_file}} {{docker_registry_key_file}} -n default
+    when: not use_self_signed_cert and (docker_registry_cert_file is defined and docker_registry_key_file is defined) and (defined_cert_exist.stat.exists and defined_key_exist.stat.exists)
+    run_once: true
+ 
+  - name: Add the secret to docker registry dc
+    shell: >
+      oc volume dc/docker-registry --add --type=secret 
+      --secret-name=registry-secret -m /etc/secrets -n default
+    run_once: true
+ 
+  - block:
+    - name: Check if scheme of liveness
+      shell: >
+        oc get dc/docker-registry -o=jsonpath={.spec.template.spec.containers[*].livenessProbe.httpGet.scheme}
+      register: liveness_scheme
+      run_once: yes
+   
+    - name: Patch HTTPS scheme of liveness
+      shell: >
+        oc patch dc/docker-registry -n default -p '{"spec": {"template": {"spec": {"containers":[{"name":"registry","livenessProbe":  {"httpGet": {"scheme":"HTTPS"}}}]}}}}'
+      when: liveness_scheme.stdout == 'HTTP'
+      run_once: yes
+   
+    - name: Check if scheme of readiness
+      shell: >
+        oc get dc/docker-registry -o=jsonpath={.spec.template.spec.containers[*].readinessProbe.httpGet.scheme}
+      register: readiness_scheme
+      run_once: yes
+   
+    - name: Patch HTTPS scheme of readness
+      shell: >
+        oc patch dc/docker-registry -n default -p '{"spec": {"template": {"spec": {"containers":[{"name":"registry","readinessProbe":  {"httpGet": {"scheme":"HTTPS"}}}]}}}}'
+      when: readiness_scheme.stdout == 'HTTP'
+      run_once: yes
+   
+    - name: Chekc if TLS enviroment exist
+      shell: >
+        oc env dc/docker-registry --list|grep REGISTRY_HTTP_TLS_CERTIFICATE
+      register: tls_env_exist
+      ignore_errors: yes
+      run_once: yes
+      
+    - name: Update environment value for HTTPS
+      shell: >
+        oc set env dc/docker-registry  -n default
+        REGISTRY_HTTP_TLS_CERTIFICATE=/etc/secrets/registry.crt 
+        REGISTRY_HTTP_TLS_KEY=/etc/secrets/registry.key
+      when: tls_env_exist.rc == 1
+      run_once: yes
+ 
 
- - name: "Stop if registry secret exist unless replace_cert is true"
-   fail:
-     msg: "[FAIL] regsitry secret exist. If you want to replace it, please use replace_cert='true'"
-   when: exist_secret.rc == 0 and not replace_cert
-   run_once: true
-
- - name: Remove exist registry secret
-   shell: "oc delete secrets registry-secret"
-   when: exist_secret.rc == 0 and replace_cert
-   run_once: true
-
- - name: Delete default secret name
-   shell: >
-     oc volumes --remove --name=$(oc get dc docker-registry -o=jsonpath={.spec.template.spec.volumes[*].name} | sed 's/ /\n/g'| grep  volume) 
-     dc/docker-registry
-   when: exist_secret.rc == 0 and replace_cert
-   run_once: true
-
- - name: Generate self signed cert for registry
-   shell: >
-     oadm ca create-server-cert 
-     --signer-cert={{ca_dir}}/ca.crt 
-     --signer-key={{ca_dir}}/ca.key 
-     --signer-serial={{ca_dir}}/ca.serial.txt 
-     --hostnames='{{docker_registry_svc_name}}.default.svc.cluster.local,{{docker_registry_svc_ip}},{{docker_registry_route_hostname}}' 
-     --cert={{temp_dir}}/registry.crt 
-     --key={{temp_dir}}/registry.key
-   when: use_self_signed_cert or (docker_registry_cert_file is not defined and docker_registry_key_file is not defined)
-   run_once: true
+  - name: "Check if limitSecretReferences is false"  
+    shell: " grep limitSecretReferences /etc/origin/master/master-config.yaml|cut -d: -f2"
+    register: is_limitSecretReferences_false
+    run_once: yes
   
- - name: Create registry secret with new cert
-   shell: >
-     oc secrets new registry-secret 
-     {{temp_dir}}/registry.crt 
-     {{temp_dir}}/registry.key
-   when: use_self_signed_cert or (docker_registry_cert_file is not defined and docker_registry_key_file is not defined)
-   run_once: true
-
- - name: Check if the defined cert exist
-   stat: path={{docker_registry_cert_file}}
-   register: defined_cert_exist
-   when: not use_self_signed_cert 
-   run_once: true
-
- - name: Check if the defined key exist
-   stat: path={{docker_registry_key_file}}
-   register: defined_key_exist
-   when: not use_self_signed_cert 
-   run_once: true
-
- - name: Create registry secret with defined cert
-   shell: >
-     oc secrets new registry-secret  
-     {{docker_registry_cert_file}} {{docker_registry_key_file}}
-   when: not use_self_signed_cert and (docker_registry_cert_file is defined and docker_registry_key_file is defined) and (defined_cert_exist.stat.exists and defined_key_exist.stat.exists)
-   run_once: true
-
- - name: Add the secret to docker registry dc
-   shell: >
-     oc volume dc/docker-registry --add --type=secret 
-     --secret-name=registry-secret -m /etc/secrets
-   run_once: true
-
- - name: "Check if limitSecretReferences is false"  
-   shell: " grep limitSecretReferences /etc/origin/master/master-config.yaml|cut -d: -f2"
-   register: is_limitSecretReferences_false
-   run_once: yes
+  - name: "If limitSecretReferences is true, link the secret to registry/default sa"
+    shell: "oc secrets link {{item}} registry-secret"
+    with_items:
+      - registry
+      - default
+    when: is_limitSecretReferences_false.stdout| replace(' ', '') |bool
+    run_once: yes
  
- - name: "If limitSecretReferences is true, link the secret to registry/default sa"
-   shell: "oc secrets link {{item}} registry-secret"
-   with_items:
-     - registry
-     - default
-   when: is_limitSecretReferences_false.stdout| replace(' ', '') |bool
-   run_once: yes
+  - name: Create docker registry cert folders
+    file: path="/etc/docker/certs.d/{{item}}:5000" state=directory
+    with_items:
+      - "{{docker_registry_svc_ip}}"
+      - "{{docker_registry_route_hostname}}"
+      - "{{docker_registry_svc_name}}.default.svc.cluster.local"
+  
+  - name: Copy the CA certificate to the Docker certificates
+    synchronize:  src=/etc/origin/master/ca.crt dest=/etc/docker/certs.d/{{item}}:5000/ca.crt 
+    delegate_to: "{{groups.masters[0]}}"
+    with_items:
+      - "{{docker_registry_svc_ip}}"
+      - "{{docker_registry_route_hostname}}"
+      - "{{docker_registry_svc_name}}.default.svc.cluster.local"
+  
+  - name: Comment out INSECURE_REGISTRY
+    replace:
+      backup: yes
+      path: /etc/sysconfig/docker
+      regexp: '^INSECURE_REGISTRY'
+      replace: '# INSECURE_REGISTRY'
+ 
+  - name: Restart docker on nodes
+    systemd: name=docker state=restarted daemon_reload=yes
+    when: restart_docker
+  
+  - name: Add config trigger to dc docker-registry
+    shell: >
+      oc set triggers dc/docker-registry -n default --from-config
+    run_once: yes 
 
- - name: Create docker registry cert folders
-   file: path="/etc/docker/certs.d/{{item}}:5000" state=directory
-   with_items:
-     - "{{docker_registry_svc_ip}}"
-     - "{{docker_registry_route_hostname}}"
+  - name: Delete exist route
+    shell: >
+      oc delete route docker-registry -n default
+    ignore_errors: yes
+    run_once: yes
  
- - name: Copy the CA certificate to the Docker certificates
-   synchronize:  src=/etc/origin/master/ca.crt dest=/etc/docker/certs.d/{{item}}:5000/ca.crt 
-   delegate_to: "{{groups.masters[0]}}"
-   with_items:
-     - "{{docker_registry_svc_ip}}"
-     - "{{docker_registry_route_hostname}}"
- 
- - name: Comment out INSECURE_REGISTRY
-   replace:
-     backup: yes
-     path: /etc/sysconfig/docker
-     regexp: '^INSECURE_REGISTRY'
-     replace: '# INSECURE_REGISTRY'
+  - name: Expose docker registry svc
+    shell: >
+      oc create route passthrough    
+      --service=docker-registry    
+      --hostname={{docker_registry_route_hostname}}
+      -n default
+    run_once: yes
 
- - name: Restart docker on nodes
-   systemd: name=docker state=restarted daemon_reload=yes
-   when: restart_docker
- 
- - name: Delete exist route
-   shell: >
-     oc delete route docker-registry -n default
-   ignore_errors: yes
-   run_once: yes
+  - block:
+    - name: Wait until docker registry deployer completed
+      shell: oc get pod |grep docker-registry|grep deploy|awk '{print $3}'
+      register: is_docker_registry_running
+      until: is_docker_registry_running.stdout.find("Completed") != -1 or is_docker_registry_running.stdout == ''
+      retries: 5
+      delay: 5
+      delegate_to: "{{groups.masters[0]}}"
+      run_once: yes
+    rescue: 
+    - name: If docker registry container is Error, redeploy it
+      shell: oc deploy docker-registry --retry
+      ignore_errors: yes
+      run_once: yes
+    always:
+    - name: "Sleep 5 secs"
+      command: "sleep 5"
+      run_once: yes
 
- - name: Expose docker registry svc
-   shell: >
-     oc create route passthrough    
-     --service=docker-registry    
-     --hostname={{docker_registry_route_hostname}}
-   run_once: yes
- 
+  - name: Wait until new docker registry container running
+    uri:
+      url: "https://{{docker_registry_svc_ip}}:5000"
+      validate_certs: no
+      return_content: yes
+    register: check_docker_registry_svc
+    until: check_docker_registry_svc.msg.find("OK") != -1 
+    retries: 3
+    delay: 3
+    delegate_to: "{{groups.masters[0]}}"
+    run_once: yes
