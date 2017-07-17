@@ -94,7 +94,7 @@
   - block:
     - name: Check if scheme of liveness
       shell: >
-        oc get dc/docker-registry -o=jsonpath={.spec.template.spec.containers[*].livenessProbe.httpGet.scheme}
+        oc get dc/docker-registry -n default -o=jsonpath={.spec.template.spec.containers[*].livenessProbe.httpGet.scheme}
       register: liveness_scheme
       run_once: yes
    
@@ -106,7 +106,7 @@
    
     - name: Check if scheme of readiness
       shell: >
-        oc get dc/docker-registry -o=jsonpath={.spec.template.spec.containers[*].readinessProbe.httpGet.scheme}
+        oc get dc/docker-registry -n default -o=jsonpath={.spec.template.spec.containers[*].readinessProbe.httpGet.scheme}
       register: readiness_scheme
       run_once: yes
    
@@ -118,7 +118,7 @@
    
     - name: Chekc if TLS enviroment exist
       shell: >
-        oc env dc/docker-registry --list|grep REGISTRY_HTTP_TLS_CERTIFICATE
+        oc env dc/docker-registry -n default --list|grep REGISTRY_HTTP_TLS_CERTIFICATE
       register: tls_env_exist
       ignore_errors: yes
       run_once: yes
@@ -192,7 +192,7 @@
 
   - block:
     - name: Wait until docker registry deployer completed
-      shell: oc get pod |grep docker-registry|grep deploy|awk '{print $3}'
+      shell: oc get pod -n default |grep docker-registry|grep deploy|awk '{print $3}'
       register: is_docker_registry_running
       until: is_docker_registry_running.stdout.find("Completed") != -1 or is_docker_registry_running.stdout == ''
       retries: 5
@@ -201,7 +201,7 @@
       run_once: yes
     rescue: 
     - name: If docker registry container is Error, redeploy it
-      shell: oc deploy docker-registry --retry
+      shell: oc deploy docker-registry -n default --retry
       ignore_errors: yes
       run_once: yes
     always:
@@ -219,4 +219,8 @@
     retries: 3
     delay: 3
     delegate_to: "{{groups.masters[0]}}"
+    run_once: yes
+
+  - name: Create test script
+    template: src=test-docker-registry.sh.j2 dest={{temp_dir}}/test-docker-registry.sh mode=777
     run_once: yes

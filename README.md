@@ -81,6 +81,47 @@ docker push docker-registry.cloudapps.example.com/test-docker-registry/busybox
 docker pull docker-registry.cloudapps.example.com/test-docker-registry/busybox
 ~~~
 
+Test Shell Script
+----------------
+- {{temp_dir}}/test-docker-registry.sh (on the first master node)
+~~~
+./test-docker-registry.sh  -ca=/etc/origin/master/ca.crt
+
+*************  Secured Docker Registry Test with Hostname  **************
+
+ Check List 
+ 1. docker login with docker-registry.cloudapps.example.com
+ 2. push busybox image to docker-registry.cloudapps.example.com
+ 3. pull the pushed busybox image from docker-registry.cloudapps.example.com
+
+Authentication required for https://master1.example.com:8443 (openshift)
+Username: joe
+Password: 
+Login successful.
+.....
+
+Result:
+ [Pull busybox Image from docker.io]: Success 
+
+ [Tag busybox Image]: Success 
+
+ [Push Image to docker-registry.cloudapps.example.com]: Success 
+
+ [Pull Image from docker-registry.cloudapps.example.com]: Success 
+
+ [busy ImageStream is created on ocp]: Success 
+
+
+Do you want to clean test project/busybox/policy?(y/n)y
+
+** Clean Images/project **
+....
+project "test-docker-registry" deleted
+
+************** Test Finished **************
+
+~~~
+
 License
 -------
 
