@@ -36,6 +36,7 @@
  
   - name: Check if /etc/secret volume exist
     shell: oc get dc docker-registry -n default -o=jsonpath={.spec.template.spec.volumes[*].name}|sed 's/\s\+/\n/g'|grep volume 
+    ignore_errors: yes
     register: secret_vol_exist
     run_once: yes
 
