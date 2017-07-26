@@ -195,7 +195,7 @@
       shell: oc get pod -n default |grep docker-registry|grep deploy|awk '{print $3}'
       register: is_docker_registry_running
       until: is_docker_registry_running.stdout.find("Completed") != -1 or is_docker_registry_running.stdout == ''
-      retries: 5
+      retries: 40
       delay: 5
       delegate_to: "{{groups.masters[0]}}"
       run_once: yes
