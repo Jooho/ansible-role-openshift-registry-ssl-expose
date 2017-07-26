@@ -40,19 +40,39 @@ done
 
 oc login 
 oc new-project test-docker-registry
-docker login -u $(oc whoami) -p $(oc whoami -t) {{docker_registry_route_hostname}}
+
 
 echo ""
 echo "Result:"
+echo ""
+echo "** Docker login **
+docker login -u $(oc whoami) -p $(oc whoami -t) {{docker_registry_route_hostname}}
 
+echo ""
+echo "** Add Policy to User($(oc whoami) **"
 oadm policy add-role-to-user system:registry $(oc whoami)
 oadm policy add-role-to-user system:image-builder $(oc whoami)
 #oadm policy add-role-to-user admin <user_name> -n openshift
 
+echo ""
+echo "** Create cert folder and copy ca({{ca_dir}}/ca.crt) **"
 mkdir -p /etc/docker/certs.d/{{docker_registry_route_hostname}}
 cp {{ca_dir}}/ca.crt  /etc/docker/certs.d/{{docker_registry_route_hostname}}
+
+echo ""
+echo "** Restart Docker **"
 systemctl restart docker
 
+echo "** Please wait for docker engine back to online **"
+for i in {60..1};
+do
+   echo -n "${i}.. "
+   sleep 1
+done
+echo "OK MOVE ON"
+
+echo ""
+echo "** Pull busybox image ** "
 docker pull busybox > /dev/null
 if [[ $? == 0 ]]
 then
@@ -60,8 +80,9 @@ then
 else
   echo " [Pull busybox Image from docker.io]: Fail"
 fi
-echo ""
 
+echo ""
+echo "** Retag busy box to push it to integrated docker registry" 
 docker tag docker.io/busybox docker-registry.cloudapps.example.com/test-docker-registry/busybox > /dev/null
 if [[ $? == 0 ]]
 then
@@ -69,8 +90,9 @@ then
 else
   echo " [Tag busybox Image]: Fail"
 fi
-echo ""
 
+echo ""
+echo "** Push image to integrated docker registry ** "
 docker push docker-registry.cloudapps.example.com/test-docker-registry/busybox > /dev/null
 if [[ $? == 0 ]]
 then
@@ -78,8 +100,9 @@ then
 else
   echo " [Push Image to {{docker_registry_route_hostname}}]: Fail"
 fi
-echo ""
 
+echo ""
+echo "** Pull the busy image from integrated docker registry **"
 docker pull docker-registry.cloudapps.example.com/test-docker-registry/busybox > /dev/null
 if [[ $? == 0 ]]
 then
@@ -87,8 +110,9 @@ then
 else
   echo " [Pull Image from {{docker_registry_route_hostname}}]: Fail"
 fi
-echo ""
 
+echo ""
+echo " Check if there is ImageStream of the image in openshift"
 oc get is busybox -n test-docker-registry > /dev/null
 if [[ $? == 0 ]]
 then
